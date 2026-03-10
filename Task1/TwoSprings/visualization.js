@@ -1,6 +1,6 @@
 let ball;
 let params = {
-  mu: 80,
+  mu: 140,
   mass: 1.0,
   k1: 0.1,
   k2: 0.1,
