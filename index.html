@@ -8,22 +8,52 @@
     <style>
         body {
             margin: 0;
-            padding: 0;
+            padding: 20px;
             display: flex;
-            justify-content: center;
+            flex-direction: column;
             align-items: center;
-            height: 100vh;
+            min-height: 100vh;
             background-color: #f0f0f0;
-            overflow: hidden;
             font-family: sans-serif;
         }
-        canvas {
+        h1 {
+            color: #333;
+            margin-bottom: 30px;
+        }
+        .container {
+            display: flex;
+            gap: 30px;
+            flex-wrap: wrap;
+            justify-content: center;
+        }
+        .simulation {
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+        }
+        .simulation h2 {
+            color: #555;
+            margin-bottom: 15px;
+            font-size: 18px;
+        }
+        .simulation iframe {
+            border: none;
             box-shadow: 0 4px 20px rgba(0,0,0,0.3);
             border-radius: 12px;
         }
     </style>
 </head>
 <body>
-    <script src="Task1/TwoSprings/visualization.js"></script>
+    <h1>Симуляция Пружинных Маятников</h1>
+    <div class="container">
+        <div class="simulation">
+            <h2>Две пружины</h2>
+            <iframe src="Task1/TwoSprings/index.html" width="850" height="650"></iframe>
+        </div>
+        <div class="simulation">
+            <h2>Три пружины</h2>
+            <iframe src="Task1/ThreeSprings/index.html" width="850" height="650"></iframe>
+        </div>
+    </div>
 </body>
 </html>
