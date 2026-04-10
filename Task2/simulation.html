@@ -1,0 +1,637 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>Deformable Body Sim</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body { background: #0a0a0f; overflow: hidden; font-family: 'Courier New', monospace; color: #c8c8d8; }
+  #canvas-container { width: 100vw; height: 100vh; }
+  #ui {
+    position: fixed; top: 16px; left: 16px; width: 248px;
+    background: rgba(10,10,20,0.88); border: 1px solid #2a2a3a;
+    border-radius: 8px; padding: 14px; backdrop-filter: blur(8px); z-index: 10;
+  }
+  #ui h2 { font-size: 11px; letter-spacing: 0.15em; text-transform: uppercase; color: #6060a0; margin-bottom: 10px; }
+  .btn-row { display: flex; gap: 5px; margin-bottom: 10px; flex-wrap: wrap; }
+  .btn {
+    flex: 1; min-width: 50px; padding: 5px 3px; font-size: 10px; letter-spacing: 0.07em;
+    background: transparent; border: 1px solid #2a2a4a; border-radius: 4px;
+    color: #8888bb; cursor: pointer; text-transform: uppercase; transition: all 0.12s;
+    font-family: 'Courier New', monospace;
+  }
+  .btn:hover { border-color: #5555aa; color: #c0c0ff; }
+  .btn.active { border-color: #6666cc; background: rgba(80,80,180,0.2); color: #c0c0ff; }
+  .btn.active-method { border-color: #44aa66; background: rgba(40,120,60,0.2); color: #88ffaa; }
+
+  .section-label {
+    font-size: 10px; letter-spacing: 0.12em; text-transform: uppercase;
+    color: #444466; margin-bottom: 6px; margin-top: 2px;
+  }
+  .param { margin-bottom: 10px; }
+  .param label { font-size: 11px; color: #8888aa; display: flex; justify-content: space-between; margin-bottom: 3px; }
+  .param label span { color: #e0e0ff; font-weight: bold; }
+  input[type=range] { width: 100%; accent-color: #5555cc; cursor: pointer; }
+  .divider { border: none; border-top: 1px solid #1a1a2a; margin: 10px 0; }
+  .hint { font-size: 10px; color: #444466; line-height: 1.6; }
+  #status { font-size: 10px; color: #334433; margin-top: 8px; }
+
+  /* compliance скрыт для Hitman и PBD */
+  .hide-compliance #row-comp { display: none; }
+</style>
+</head>
+<body>
+<div id="canvas-container"></div>
+
+<div id="ui">
+  <h2>Deformable Body</h2>
+
+  <div class="section-label">method</div>
+  <div class="btn-row" id="method-btns">
+    <button class="btn active-method" onclick="app.setMethod('hitman')">Hitman</button>
+    <button class="btn"               onclick="app.setMethod('pbd')">PBD</button>
+    <button class="btn"               onclick="app.setMethod('xpbd')">XPBD</button>
+  </div>
+
+  <div class="section-label">scene</div>
+  <div class="btn-row" id="scene-btns">
+    <button class="btn active" onclick="app.loadScene(0)">Hang</button>
+    <button class="btn"        onclick="app.loadScene(1)">Fall</button>
+    <button class="btn"        onclick="app.loadScene(2)">Stretch</button>
+    <button class="btn"        onclick="app.loadScene(3)">Ball</button>
+  </div>
+
+  <hr class="divider">
+
+  <div class="param">
+    <label>Iterations   <span id="v-iter">10</span></label>
+    <input type="range" min="1" max="40"  value="10"  oninput="app.setParam('iterations',  +this.value,             'v-iter', v => v)">
+  </div>
+  <div class="param" id="row-comp">
+    <label>Compliance   <span id="v-comp">0.0010</span></label>
+    <input type="range" min="0" max="100" value="5"   oninput="app.setParam('compliance',   (this.value/100)**3*0.5,  'v-comp', v => v.toFixed(4))">
+  </div>
+  <div class="param">
+    <label>Gravity      <span id="v-grav">9.8</span></label>
+    <input type="range" min="0" max="30"  value="9.8" step="0.1" oninput="app.setParam('gravity',    +this.value,             'v-grav', v => v.toFixed(1))">
+  </div>
+  <div class="param">
+    <label>Friction     <span id="v-fric">0.30</span></label>
+    <input type="range" min="0" max="100" value="30"  oninput="app.setParam('friction',    this.value/100,            'v-fric', v => v.toFixed(2))">
+  </div>
+  <div class="param">
+    <label>Restitution  <span id="v-rest">0.30</span></label>
+    <input type="range" min="0" max="100" value="30"  oninput="app.setParam('restitution', this.value/100,            'v-rest', v => v.toFixed(2))">
+  </div>
+  <div class="param">
+    <label>Point radius <span id="v-rad">0.12</span></label>
+    <input type="range" min="1" max="40"  value="12"  oninput="app.setParam('pointRadius', this.value/100,            'v-rad',  v => v.toFixed(2)); app.renderer.rebuild(app.physics, app.params.pointRadius)">
+  </div>
+
+  <hr class="divider">
+  <div class="hint">LMB — grab point &nbsp; RMB — orbit &nbsp; Scroll — zoom</div>
+  <div id="status">pts: 0 | constraints: 0</div>
+</div>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+<script>
+
+// ======================================PHYSICS==========================================
+
+class PhysicsBase {
+  constructor() {
+    this.positions   = [];
+    this.constraints = [];
+    this.pinned      = [];
+
+    this.prevPositions = [];
+    this.velocities    = [];
+    this.predicted     = [];
+    this.masses        = [];
+
+    this._numPersistent = 0;
+    this._dragIndex  = -1;
+    this._dragTarget = new THREE.Vector3();
+
+    this.FLOOR_Y = 0;
+    this.DT      = 1 / 60;
+  }
+
+
+  clear() {
+    this.positions = []; this.prevPositions = []; this.velocities = [];
+    this.predicted = []; this.masses = []; this.pinned = [];
+    this.constraints = []; this._numPersistent = 0;
+  }
+
+  addPoint(x, y, z, isPinned = false, mass = 1) {
+    this.positions    .push(new THREE.Vector3(x, y, z));
+    this.prevPositions.push(new THREE.Vector3(x, y, z));
+    this.velocities   .push(new THREE.Vector3());
+    this.predicted    .push(new THREE.Vector3(x, y, z));
+    this.masses       .push(mass);
+    this.pinned       .push(isPinned);
+    return this.positions.length - 1;
+  }
+
+  addDistanceConstraint(i, j) {
+    this.constraints.push({ type: 'distance', i, j, restLen: this.positions[i].distanceTo(this.positions[j]), lambda: 0 });
+    this._numPersistent = this.constraints.length;
+  }
+
+  buildGrid(cols, rows, sx, sy, ox, oy, oz, pinnedFn) {
+    this.clear();
+    for (let r = 0; r < rows; r++)
+      for (let c = 0; c < cols; c++)
+        this.addPoint(ox + c * sx, oy - r * sy, oz, pinnedFn(r, c, rows, cols));
+    for (let r = 0; r < rows; r++) {
+      for (let c = 0; c < cols; c++) {
+        const idx = r * cols + c;
+        if (c + 1 < cols)                  this.addDistanceConstraint(idx, idx + 1);
+        if (r + 1 < rows)                  this.addDistanceConstraint(idx, idx + cols);
+        if (c + 1 < cols && r + 1 < rows) {
+          this.addDistanceConstraint(idx,     idx + cols + 1);
+          this.addDistanceConstraint(idx + 1, idx + cols);
+        }
+      }
+    }
+  }
+
+  buildBallCluster(cx, cy, cz, radius, n) {
+    const start = this.positions.length;
+    this.addPoint(cx, cy, cz);
+    for (let i = 0; i < n; i++) {
+      const phi   = Math.acos(1 - 2 * (i + 0.5) / n);
+      const theta = Math.PI * (1 + Math.sqrt(5)) * i;
+      this.addPoint(
+        cx + radius * Math.sin(phi) * Math.cos(theta),
+        cy + radius * Math.sin(phi) * Math.sin(theta),
+        cz + radius * Math.cos(phi)
+      );
+    }
+    for (let i = start; i < this.positions.length; i++)
+      for (let j = i + 1; j < this.positions.length; j++)
+        if (this.positions[i].distanceTo(this.positions[j]) < radius * 2.2)
+          this.addDistanceConstraint(i, j);
+  }
+
+  setDrag(i, t) { this._dragIndex = i; this._dragTarget.copy(t); }
+  clearDrag()   { this._dragIndex = -1; }
+
+  _rebuildCollisions(buf, pointRadius, N) {
+    this.constraints.length = this._numPersistent;
+    const minD2 = (pointRadius * 2) ** 2;
+    for (let i = 0; i < N; i++) {
+      if (!this.pinned[i] && buf[i].y < this.FLOOR_Y + pointRadius)
+        this.constraints.push({ type: 'floor', i, pointRadius });
+    }
+    for (let i = 0; i < N; i++) {
+      for (let j = i + 1; j < N; j++) {
+        if (this.pinned[i] && this.pinned[j]) continue;
+        const dx = buf[j].x-buf[i].x, dy = buf[j].y-buf[i].y, dz = buf[j].z-buf[i].z;
+        if (dx*dx + dy*dy + dz*dz < minD2)
+          this.constraints.push({ type: 'sphere', i, j, pointRadius });
+      }
+    }
+  }
+
+
+  _solveConstraint(buf, c, alpha) {
+    if (c.type === 'distance') {
+      const pi = buf[c.i], pj = buf[c.j];
+      const dx = pj.x-pi.x, dy = pj.y-pi.y, dz = pj.z-pi.z;
+      const len = Math.sqrt(dx*dx + dy*dy + dz*dz);
+      if (len < 1e-8) return;
+      const w1 = this.pinned[c.i] ? 0 : 1 / this.masses[c.i];
+      const w2 = this.pinned[c.j] ? 0 : 1 / this.masses[c.j];
+
+      const C = len - c.restLen;
+      const dlambda = (-C - alpha * c.lambda) / (w1 + w2 + alpha);
+      c.lambda += dlambda;
+      const nx = dx/len, ny = dy/len, nz = dz/len;
+      if (!this.pinned[c.i]) { pi.x -= w1*dlambda*nx; pi.y -= w1*dlambda*ny; pi.z -= w1*dlambda*nz; }
+      if (!this.pinned[c.j]) { pj.x += w2*dlambda*nx; pj.y += w2*dlambda*ny; pj.z += w2*dlambda*nz; }
+
+    } else if (c.type === 'floor') {
+      if (buf[c.i].y < this.FLOOR_Y + c.pointRadius)
+        buf[c.i].y = this.FLOOR_Y + c.pointRadius;
+
+    } else if (c.type === 'sphere') {
+      const pi = buf[c.i], pj = buf[c.j];
+      const dx = pj.x-pi.x, dy = pj.y-pi.y, dz = pj.z-pi.z;
+      const dist = Math.sqrt(dx*dx + dy*dy + dz*dz);
+      const minD = c.pointRadius * 2;
+      if (dist >= minD || dist < 1e-8) return;
+      const pen = (minD - dist) * 0.5;
+      const nx = dx/dist, ny = dy/dist, nz = dz/dist;
+      const w1 = this.pinned[c.i] ? 0 : 1 / this.masses[c.i], w2 = this.pinned[c.j] ? 0 : 1 / this.masses[c.j];
+      const wt = w1 + w2; if (wt < 1e-10) return;
+      if (!this.pinned[c.i]) { pi.x -= w1/wt*pen*nx; pi.y -= w1/wt*pen*ny; pi.z -= w1/wt*pen*nz; }
+      if (!this.pinned[c.j]) { pj.x += w2/wt*pen*nx; pj.y += w2/wt*pen*ny; pj.z += w2/wt*pen*nz; }
+    }
+  }
+
+  _applyFloorResponse(i, pointRadius, friction, restitution) {
+    const p = this.positions[i], v = this.velocities[i];
+    if (p.y <= this.FLOOR_Y + pointRadius + 1e-4) {
+      if (v.y < 0) v.y = -v.y * restitution;
+      v.x *= (1 - friction);
+      v.z *= (1 - friction);
+    }
+  }
+}
+
+class HitmanPhysics extends PhysicsBase {
+  step({ iterations, gravity, friction, restitution, pointRadius }) {
+    const { DT, FLOOR_Y, positions, prevPositions, pinned, masses } = this;
+    const N = positions.length;
+
+    for (let i = 0; i < N; i++) {
+      if (pinned[i]) continue;
+      const x = positions[i], px = prevPositions[i];
+      const delta_x = x.x - px.x, delta_y = x.y - px.y, delta_z = x.z - px.z;
+      px.copy(x)
+      x.x += delta_x;
+      x.y +=delta_y - gravity * DT * DT;
+      x.z += delta_z;
+    }
+
+    this._rebuildCollisions(positions, pointRadius, N);
+
+    for (let k = 0; k < this._numPersistent; k++) this.constraints[k].lambda = 0;
+    for (let iter = 0; iter < iterations; iter++) {
+      for (const c of this.constraints)
+        //alpha=0, not xpbd
+        this._solveConstraint(positions, c, 0);
+    }
+
+    if (this._dragIndex >= 0) {
+      positions[this._dragIndex].lerp(this._dragTarget, 0.4);
+      prevPositions[this._dragIndex].copy(positions[this._dragIndex]);
+    }
+
+    for (let i = 0; i < N; i++) {
+      if (pinned[i]) continue;
+      if (positions[i].y <= FLOOR_Y + pointRadius + 1e-4) {
+        const p = positions[i], pp = prevPositions[i];
+        let vx = p.x - pp.x, vy = p.y - pp.y, vz = p.z - pp.z;
+        if (vy < 0) vy = -vy * restitution;
+        vx *= (1 - friction);
+        vz *= (1 - friction);
+        pp.x = p.x - vx; pp.y = p.y - vy; pp.z = p.z - vz;
+      }
+    }
+  }
+}
+
+class PBDPhysics extends PhysicsBase {
+  step({ iterations, gravity, friction, restitution, pointRadius }) {
+    const { DT, FLOOR_Y, positions, predicted, velocities, pinned } = this;
+    const N = positions.length;
+    while (predicted.length < N) predicted.push(new THREE.Vector3());
+
+    for (let i = 0; i < N; i++) {
+      if (pinned[i]) { predicted[i].copy(positions[i]); continue; }
+      const v = velocities[i];
+      v.y -= gravity * DT;
+      v.multiplyScalar(0.999);
+      predicted[i].x = positions[i].x + v.x * DT;
+      predicted[i].y = positions[i].y + v.y * DT;
+      predicted[i].z = positions[i].z + v.z * DT;
+    }
+
+    this._rebuildCollisions(predicted, pointRadius, N);
+
+    for (let k = 0; k < this._numPersistent; k++) this.constraints[k].lambda = 0;
+    for (let iter = 0; iter < iterations; iter++) {
+      for (const c of this.constraints)
+         //alpha=0, not xpbd
+        this._solveConstraint(predicted, c, 0);
+    }
+
+    if (this._dragIndex >= 0) predicted[this._dragIndex].lerp(this._dragTarget, 0.4);
+
+    for (let i = 0; i < N; i++) {
+      if (pinned[i]) {
+        if (i === this._dragIndex) positions[i].copy(predicted[i]);
+        continue;
+      }
+      velocities[i].x = (predicted[i].x - positions[i].x) / DT;
+      velocities[i].y = (predicted[i].y - positions[i].y) / DT;
+      velocities[i].z = (predicted[i].z - positions[i].z) / DT;
+      positions[i].copy(predicted[i]);
+    }
+
+    for (let i = 0; i < N; i++) {
+      if (!pinned[i]) this._applyFloorResponse(i, pointRadius, friction, restitution);
+    }
+  }
+}
+
+class XPBDPhysics extends PhysicsBase {
+  step({ iterations, compliance, gravity, friction, restitution, pointRadius }) {
+    const { DT, FLOOR_Y, positions, predicted, velocities, pinned } = this;
+    const N = positions.length;
+    while (predicted.length < N) predicted.push(new THREE.Vector3());
+
+    for (let i = 0; i < N; i++) {
+      if (pinned[i]) { predicted[i].copy(positions[i]); continue; }
+      const v = velocities[i];
+      v.y -= gravity * DT;
+      v.multiplyScalar(0.999);
+      predicted[i].x = positions[i].x + v.x * DT;
+      predicted[i].y = positions[i].y + v.y * DT;
+      predicted[i].z = positions[i].z + v.z * DT;
+    }
+
+    this._rebuildCollisions(predicted, pointRadius, N);
+
+    const alpha = compliance / (DT * DT);
+    for (let k = 0; k < this._numPersistent; k++) this.constraints[k].lambda = 0;
+    for (let iter = 0; iter < iterations; iter++) {
+      for (const c of this.constraints)
+        this._solveConstraint(predicted, c, alpha);
+    }
+
+    if (this._dragIndex >= 0) predicted[this._dragIndex].lerp(this._dragTarget, 0.4);
+
+    for (let i = 0; i < N; i++) {
+      if (pinned[i]) {
+        if (i === this._dragIndex) positions[i].copy(predicted[i]);
+        continue;
+      }
+      velocities[i].x = (predicted[i].x - positions[i].x) / DT;
+      velocities[i].y = (predicted[i].y - positions[i].y) / DT;
+      velocities[i].z = (predicted[i].z - positions[i].z) / DT;
+      positions[i].copy(predicted[i]);
+    }
+
+    for (let i = 0; i < N; i++) {
+      if (!pinned[i]) this._applyFloorResponse(i, pointRadius, friction, restitution);
+    }
+  }
+}
+
+// ======================================RENDERER==========================================
+class Renderer {
+  constructor(container) {
+    this.renderer = new THREE.WebGLRenderer({ antialias: true });
+    this.renderer.setPixelRatio(devicePixelRatio);
+    this.renderer.shadowMap.enabled = true;
+    this.renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+    container.appendChild(this.renderer.domElement);
+
+    this.scene  = new THREE.Scene();
+    this.scene.background = new THREE.Color(0x0a0a0f);
+    this.scene.fog = new THREE.Fog(0x0a0a0f, 18, 35);
+
+    this.camera = new THREE.PerspectiveCamera(55, 1, 0.01, 100);
+    this._pointMeshes = [];
+    this._lineMesh    = null;
+    this._ptMat     = new THREE.MeshStandardMaterial({ color: 0x8888ff, roughness: 0.3, metalness: 0.5, emissive: 0x111133 });
+    this._pinnedMat = new THREE.MeshStandardMaterial({ color: 0xff4466, roughness: 0.3, metalness: 0.5, emissive: 0x220011 });
+    this._lineMat   = new THREE.LineBasicMaterial({ color: 0x4444aa, transparent: true, opacity: 0.7 });
+    this._raycaster = new THREE.Raycaster();
+    this._orbit     = { theta: 0.3, phi: 0.5, radius: 9, dragging: false };
+
+    this._initLights();
+    this._initFloor();
+    this._applyOrbit();
+    window.addEventListener('resize', () => this._onResize());
+    this._onResize();
+  }
+
+  rebuild(physics, pointRadius = 0.12) {
+    this._pointMeshes.forEach(m => this.scene.remove(m));
+    this._pointMeshes = [];
+    if (this._lineMesh) this.scene.remove(this._lineMesh);
+
+    const geo = new THREE.SphereGeometry(pointRadius, 8, 6);
+    for (let i = 0; i < physics.positions.length; i++) {
+      const m = new THREE.Mesh(geo, physics.pinned[i] ? this._pinnedMat.clone() : this._ptMat.clone());
+      m.castShadow = true;
+      m.position.copy(physics.positions[i]);
+      this.scene.add(m);
+      this._pointMeshes.push(m);
+    }
+    const numLines = physics._numPersistent;
+    const verts = new Float32Array(numLines * 6);
+    const lg = new THREE.BufferGeometry();
+    lg.setAttribute('position', new THREE.BufferAttribute(verts, 3));
+    this._lineMesh = new THREE.LineSegments(lg, this._lineMat);
+    this.scene.add(this._lineMesh);
+
+    document.getElementById('status').textContent =
+      `pts: ${physics.positions.length} | constraints: ${physics._numPersistent}`;
+  }
+
+  sync(physics) {
+    for (let i = 0; i < this._pointMeshes.length; i++)
+      this._pointMeshes[i].position.copy(physics.positions[i]);
+    if (!this._lineMesh || !physics._numPersistent) return;
+    const arr = this._lineMesh.geometry.attributes.position.array;
+    for (let k = 0; k < physics._numPersistent; k++) {
+      const c = physics.constraints[k];
+      arr[k*6+0]=physics.positions[c.i].x; arr[k*6+1]=physics.positions[c.i].y; arr[k*6+2]=physics.positions[c.i].z;
+      arr[k*6+3]=physics.positions[c.j].x; arr[k*6+4]=physics.positions[c.j].y; arr[k*6+5]=physics.positions[c.j].z;
+    }
+    this._lineMesh.geometry.attributes.position.needsUpdate = true;
+  }
+
+  render() { this.renderer.render(this.scene, this.camera); }
+
+  pickPoint(cx, cy, physics) {
+    this._raycaster.setFromCamera(this._toNDC(cx, cy), this.camera);
+    let best = -1, bestD = Infinity;
+    for (let i = 0; i < physics.positions.length; i++) {
+      const rd = this._raycaster.ray.distanceToPoint(physics.positions[i]);
+      const cd = physics.positions[i].distanceTo(this.camera.position);
+      if (rd < 0.3 && cd < bestD) { bestD = cd; best = i; }
+    }
+    return best;
+  }
+
+  getDragTarget(cx, cy, anchor) {
+    this._raycaster.setFromCamera(this._toNDC(cx, cy), this.camera);
+    const n = this.camera.getWorldDirection(new THREE.Vector3()).negate();
+    const plane = new THREE.Plane().setFromNormalAndCoplanarPoint(n, anchor);
+    const out = new THREE.Vector3();
+    this._raycaster.ray.intersectPlane(plane, out);
+    return out;
+  }
+
+  startOrbit(x, y)   { Object.assign(this._orbit, { dragging:true, startX:x, startY:y, startTheta:this._orbit.theta, startPhi:this._orbit.phi }); }
+  updateOrbit(x, y)  {
+    if (!this._orbit.dragging) return;
+    this._orbit.theta = this._orbit.startTheta - (x - this._orbit.startX) * 0.008;
+    this._orbit.phi   = Math.max(0.1, Math.min(Math.PI-0.1, this._orbit.startPhi + (y - this._orbit.startY) * 0.008));
+    this._applyOrbit();
+  }
+  endOrbit()         { this._orbit.dragging = false; }
+  zoom(d)            { this._orbit.radius = Math.max(2, Math.min(25, this._orbit.radius + d * 0.01)); this._applyOrbit(); }
+  get domElement()   { return this.renderer.domElement; }
+
+  _initLights() {
+    this.scene.add(new THREE.AmbientLight(0x202035, 1.2));
+    const dir = new THREE.DirectionalLight(0x8080ff, 1.5);
+    dir.position.set(5,10,5); dir.castShadow=true; dir.shadow.mapSize.set(1024,1024);
+    this.scene.add(dir);
+    const pt = new THREE.PointLight(0xff4466, 0.8, 20);
+    pt.position.set(-4,6,-2); this.scene.add(pt);
+  }
+
+  _initFloor() {
+    const m = new THREE.Mesh(
+      new THREE.PlaneGeometry(20,20),
+      new THREE.MeshStandardMaterial({ color:0x111118, roughness:0.9, metalness:0.1 })
+    );
+    m.rotation.x = -Math.PI/2; m.receiveShadow = true; this.scene.add(m);
+    this.scene.add(new THREE.GridHelper(20,40,0x1a1a2a,0x151520));
+  }
+
+  _applyOrbit() {
+    const { theta, phi, radius } = this._orbit;
+    this.camera.position.set(radius*Math.sin(phi)*Math.sin(theta), radius*Math.cos(phi)+2, radius*Math.sin(phi)*Math.cos(theta));
+    this.camera.lookAt(0,2,0);
+  }
+
+  _onResize() {
+    this.camera.aspect = window.innerWidth / window.innerHeight;
+    this.camera.updateProjectionMatrix();
+    this.renderer.setSize(window.innerWidth, window.innerHeight);
+  }
+
+  _toNDC(cx, cy) {
+    return new THREE.Vector2((cx/window.innerWidth)*2-1, -(cy/window.innerHeight)*2+1);
+  }
+}
+
+
+class App {
+  constructor() {
+    this.params = {
+      iterations: 10, compliance: 0.001, gravity: 9.8,
+      friction: 0.3,  restitution: 0.3,  pointRadius: 0.12,
+    };
+
+    this._solvers = {
+      hitman: new HitmanPhysics(),
+      pbd:    new PBDPhysics(),
+      xpbd:   new XPBDPhysics(),
+    };
+    this._method  = 'hitman';
+    this.physics  = this._solvers.hitman;
+    this.renderer = new Renderer(document.getElementById('canvas-container'));
+
+    this._dragIndex   = -1;
+    this._mouseDown   = false;
+    this._mouseButton = 0;
+    this._currentScene = 0;
+
+    this._bindInput();
+    this.loadScene(0);
+    this._loop();
+  }
+
+  setMethod(name) {
+    this._method = name;
+    this.physics = this._solvers[name];
+
+    document.querySelectorAll('#method-btns .btn').forEach(b => {
+      b.classList.toggle('active-method', b.textContent.toLowerCase() === name);
+    });
+
+    document.getElementById('ui').classList.toggle('hide-compliance', name !== 'xpbd');
+
+    this.loadScene(this._currentScene);
+  }
+
+
+  loadScene(index) {
+    this._currentScene = index;
+    document.querySelectorAll('#scene-btns .btn').forEach((b, i) =>
+      b.classList.toggle('active', i === index));
+
+    const p = this.physics;
+
+    if (index === 0) {
+      p.buildGrid(8, 8, 0.5, 0.5, -1.75, 6, 0,
+        (r, c, rows, cols) => r === 0 && (c === 0 || c === cols - 1));
+
+    } else if (index === 1) {
+      p.buildGrid(7, 7, 0.55, 0.55, -1.65, 6.5, 0, () => false);
+      p.buildBallCluster(0, 3, 0.5, 0.5, 10);
+
+    } else if (index === 2) {
+      const cols = 7, rows = 7, sp = 0.5;
+      p.buildGrid(cols, rows, sp, sp, -(cols-1)*sp/2, (rows-1)*sp/2+3, 0, () => false);
+      const corners = [0, cols-1, (rows-1)*cols, rows*cols-1];
+      const offsets = [[-2.5,5.5,0],[2.5,5.5,0],[-2.5,1.5,0],[2.5,1.5,0]];
+      corners.forEach((ci, k) => {
+        p.pinned[ci] = true;
+        p.positions[ci].set(...offsets[k]);
+        p.prevPositions[ci].set(...offsets[k]);
+        p.predicted[ci].set(...offsets[k]);
+      });
+
+    } else if (index === 3) {
+      p.clear();
+      p.buildBallCluster(0, 5, 0, 0.7, 16);
+    }
+
+    this.renderer.rebuild(p, this.params.pointRadius);
+  }
+
+
+  setParam(key, value, displayId, fmt) {
+    this.params[key] = value;
+    document.getElementById(displayId).textContent = fmt(value);
+  }
+
+
+  _loop() {
+    requestAnimationFrame(() => this._loop());
+    this.physics.step(this.params);
+    this.renderer.sync(this.physics);
+    this.renderer.render();
+  }
+
+
+  _bindInput() {
+    const el = this.renderer.domElement;
+    el.addEventListener('mousedown',     e => this._onDown(e));
+    el.addEventListener('wheel',         e => this.renderer.zoom(e.deltaY));
+    el.addEventListener('contextmenu',   e => e.preventDefault());
+    window.addEventListener('mousemove', e => this._onMove(e));
+    window.addEventListener('mouseup',   () => this._onUp());
+  }
+
+  _onDown(e) {
+    this._mouseDown = true; this._mouseButton = e.button;
+    if (e.button === 0) {
+      this._dragIndex = this.renderer.pickPoint(e.clientX, e.clientY, this.physics);
+    } else if (e.button === 2) {
+      this.renderer.startOrbit(e.clientX, e.clientY);
+    }
+  }
+
+  _onMove(e) {
+    if (!this._mouseDown) return;
+    if (this._mouseButton === 0 && this._dragIndex >= 0) {
+      this.physics.setDrag(this._dragIndex,
+        this.renderer.getDragTarget(e.clientX, e.clientY, this.physics.positions[this._dragIndex]));
+    } else if (this._mouseButton === 2) {
+      this.renderer.updateOrbit(e.clientX, e.clientY);
+    }
+  }
+
+  _onUp() {
+    this._mouseDown = false; this._dragIndex = -1;
+    this.physics.clearDrag(); this.renderer.endOrbit();
+  }
+}
+
+const app = new App();
+</script>
+</body>
+</html>
