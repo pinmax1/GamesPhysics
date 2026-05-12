@@ -1,0 +1,611 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>Rigid Body 3D — Part 1</title>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+<style>
+* { box-sizing: border-box; margin: 0; padding: 0; }
+body {
+  background: #0a0a0f;
+  color: #c0c0d8;
+  font-family: 'Courier New', monospace;
+  display: flex;
+  flex-direction: column;
+  height: 100vh;
+  overflow: hidden;
+}
+
+#top-bar {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 7px 14px;
+  background: #0d0d18;
+  border-bottom: 1px solid #1a1a30;
+  flex-shrink: 0;
+  flex-wrap: wrap;
+}
+
+#top-bar h1 {
+  font-size: 12px;
+  color: #5555aa;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  white-space: nowrap;
+}
+
+.sep { width: 1px; height: 18px; background: #1e1e38; flex-shrink: 0; }
+
+.btn-group { display: flex; gap: 3px; }
+
+button {
+  background: #111128;
+  border: 1px solid #252545;
+  color: #7777aa;
+  padding: 3px 10px;
+  font-family: 'Courier New', monospace;
+  font-size: 10px;
+  cursor: pointer;
+  border-radius: 2px;
+  transition: all 0.12s;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  white-space: nowrap;
+}
+button:hover { background: #1a1a38; color: #aaaadd; }
+button.active { background: #252558; border-color: #4444aa; color: #9999ee; }
+
+.param-group {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 10px;
+  color: #555588;
+}
+.param-group label { text-transform: uppercase; letter-spacing: 0.05em; white-space: nowrap; }
+.param-group input[type=range] { width: 70px; accent-color: #4444aa; cursor: pointer; }
+.param-group span { color: #9999cc; min-width: 28px; font-size: 10px; }
+
+#layout {
+  display: flex;
+  flex: 1;
+  overflow: hidden;
+}
+
+#canvas-container {
+  flex: 1;
+  position: relative;
+  overflow: hidden;
+}
+
+#side-panel {
+  width: 215px;
+  background: #0c0c18;
+  border-left: 1px solid #181830;
+  display: flex;
+  flex-direction: column;
+  overflow-y: auto;
+  flex-shrink: 0;
+}
+
+.panel-sec {
+  padding: 9px 11px;
+  border-bottom: 1px solid #141428;
+}
+.panel-sec h3 {
+  font-size: 9px;
+  color: #333358;
+  text-transform: uppercase;
+  letter-spacing: 0.12em;
+  margin-bottom: 7px;
+}
+.stat-row {
+  display: flex;
+  justify-content: space-between;
+  margin-bottom: 3px;
+  font-size: 10px;
+}
+.stat-label { color: #484870; }
+.stat-val { color: #8888bb; font-family: 'Courier New', monospace; }
+.stat-val.ok  { color: #44aa66; }
+.stat-val.med { color: #aaaa44; }
+.stat-val.bad { color: #aa4444; }
+
+#graph-canvas {
+  width: 100%;
+  height: 90px;
+  display: block;
+  background: #070710;
+  border-bottom: 1px solid #141428;
+  flex-shrink: 0;
+}
+
+.desc {
+  font-size: 9px;
+  color: #383860;
+  line-height: 1.65;
+  padding: 8px 11px 10px;
+}
+
+.vec-row {
+  display: flex;
+  justify-content: space-between;
+  margin-bottom: 2px;
+  font-size: 10px;
+}
+.vec-label { color: #383860; }
+.vec-val { color: #666699; font-family: 'Courier New', monospace; font-size: 9px; }
+</style>
+</head>
+<body>
+
+<div id="top-bar">
+  <h1>Rigid Body 3D — Part 1</h1>
+  <div class="sep"></div>
+
+  <div class="btn-group" id="method-btns">
+    <button onclick="setMethod('global')"         id="btn-global">Global coords</button>
+    <button onclick="setMethod('local_no_gyro')"  id="btn-local_no_gyro">Local no gyro</button>
+    <button onclick="setMethod('explicit')"       id="btn-explicit">Explicit gyro</button>
+    <button onclick="setMethod('implicit')"       id="btn-implicit" class="active">Implicit gyro</button>
+  </div>
+
+  <div class="sep"></div>
+
+  <div class="param-group">
+    <label>ω₀</label>
+    <input type="range" id="sl-omega" min="0.5" max="20" step="0.5" value="8">
+    <span id="lbl-omega">8.0</span>
+  </div>
+
+  <div class="param-group">
+    <label>Iₓ</label>
+    <input type="range" id="sl-ix" min="0.1" max="5" step="0.1" value="1.0">
+    <span id="lbl-ix">1.0</span>
+  </div>
+  <div class="param-group">
+    <label>Iᵧ</label>
+    <input type="range" id="sl-iy" min="0.1" max="5" step="0.1" value="2.0">
+    <span id="lbl-iy">2.0</span>
+  </div>
+  <div class="param-group">
+    <label>I_z</label>
+    <input type="range" id="sl-iz" min="0.1" max="5" step="0.1" value="3.0">
+    <span id="lbl-iz">3.0</span>
+  </div>
+
+  <div class="sep"></div>
+
+  <div class="param-group">
+    <label>dt×</label>
+    <input type="range" id="sl-dt" min="0.1" max="5" step="0.1" value="1.0">
+    <span id="lbl-dt">1.0</span>
+  </div>
+
+  <div class="sep"></div>
+  <button onclick="resetSim()">Reset</button>
+  <button onclick="togglePause()" id="btn-pause">Pause</button>
+</div>
+
+<div id="layout">
+  <div id="canvas-container"></div>
+  <div id="side-panel">
+
+    <div class="panel-sec">
+      <h3>Angular momentum L</h3>
+      <div class="stat-row"><span class="stat-label">|L₀|</span><span class="stat-val" id="s-L0">—</span></div>
+      <div class="stat-row"><span class="stat-label">|L|</span><span class="stat-val" id="s-L">—</span></div>
+      <div class="stat-row"><span class="stat-label">drift %</span><span class="stat-val" id="s-Ldrift">—</span></div>
+    </div>
+
+    <div class="panel-sec">
+      <h3>Kinetic energy</h3>
+      <div class="stat-row"><span class="stat-label">E₀</span><span class="stat-val" id="s-E0">—</span></div>
+      <div class="stat-row"><span class="stat-label">E</span><span class="stat-val" id="s-E">—</span></div>
+      <div class="stat-row"><span class="stat-label">drift %</span><span class="stat-val" id="s-Edrift">—</span></div>
+    </div>
+
+    <div class="panel-sec">
+      <h3>ω (body frame)</h3>
+      <div class="vec-row"><span class="vec-label">ωₓ</span><span class="vec-val" id="s-wx">—</span></div>
+      <div class="vec-row"><span class="vec-label">ωᵧ</span><span class="vec-val" id="s-wy">—</span></div>
+      <div class="vec-row"><span class="vec-label">ω_z</span><span class="vec-val" id="s-wz">—</span></div>
+      <div class="vec-row"><span class="vec-label">|ω|</span><span class="vec-val" id="s-wlen">—</span></div>
+    </div>
+
+    <div class="panel-sec">
+      <h3>Time</h3>
+      <div class="stat-row"><span class="stat-label">sim time</span><span class="stat-val" id="s-time">—</span></div>
+      <div class="stat-row"><span class="stat-label">fps</span><span class="stat-val" id="s-fps">—</span></div>
+    </div>
+
+    <canvas id="graph-canvas"></canvas>
+
+    <div class="desc" id="method-desc"></div>
+  </div>
+</div>
+
+<script>
+const DESCS = {
+  global:        'Global coords: angular momentum L = R·I_body·Rᵀ·ω integrated directly. Inertia tensor NOT updated between sub-steps → L drifts over time.',
+  local_no_gyro: 'Body frame, no gyroscopic term. dω/dt = I⁻¹·τ. Missing −I⁻¹(ω×Iω) causes L to drift rapidly.',
+  explicit:      'Explicit gyro: dω/dt = I⁻¹·(τ − ω×(I·ω)). Correct equation, forward Euler. Energy grows → unstable. Shows Dzhanibekov effect.',
+  implicit:      'Implicit gyro (symplectic Euler). Solve ω(t+dt) implicitly via Newton step. Energy stable / slightly dissipative. Shows Dzhanibekov effect.',
+};
+
+const params = {
+  omega0: 8,
+  Ix: 1.0, Iy: 2.0, Iz: 3.0,
+  dtScale: 1.0,
+  paused: false,
+};
+
+function wireSlider(id, lbl, key, fmt) {
+  const sl = document.getElementById(id);
+  sl.addEventListener('input', () => {
+    params[key] = parseFloat(sl.value);
+    document.getElementById(lbl).textContent = fmt(params[key]);
+    resetSim();
+  });
+}
+wireSlider('sl-omega', 'lbl-omega', 'omega0', v => v.toFixed(1));
+wireSlider('sl-ix',    'lbl-ix',   'Ix',     v => v.toFixed(1));
+wireSlider('sl-iy',    'lbl-iy',   'Iy',     v => v.toFixed(1));
+wireSlider('sl-iz',    'lbl-iz',   'Iz',     v => v.toFixed(1));
+wireSlider('sl-dt',    'lbl-dt',   'dtScale',v => v.toFixed(1));
+
+function togglePause() {
+  params.paused = !params.paused;
+  document.getElementById('btn-pause').classList.toggle('active', params.paused);
+  document.getElementById('btn-pause').textContent = params.paused ? 'Resume' : 'Pause';
+}
+const history = { L: [], E: [], maxLen: 400 };
+let L0 = 0, E0 = 0;
+
+function pushHistory(L, E) {
+  history.L.push(L); history.E.push(E);
+  if (history.L.length > history.maxLen) { history.L.shift(); history.E.shift(); }
+}
+
+const gc = document.getElementById('graph-canvas');
+const gctx = gc.getContext('2d');
+
+function drawGraph() {
+  const W = gc.clientWidth || 215, H = 90;
+  gc.width = W; gc.height = H;
+  gctx.fillStyle = '#070710';
+  gctx.fillRect(0, 0, W, H);
+
+  if (history.L.length < 2) return;
+
+  gctx.strokeStyle = '#1a1a30'; gctx.lineWidth = 1;
+  gctx.beginPath(); gctx.moveTo(0, H / 2); gctx.lineTo(W, H / 2); gctx.stroke();
+
+  function drawLine(arr, color) {
+    const mn = Math.min(...arr), mx = Math.max(...arr);
+    const range = (mx - mn) || 1e-10;
+    gctx.strokeStyle = color; gctx.lineWidth = 1.2; gctx.beginPath();
+    arr.forEach((v, i) => {
+      const x = (i / (arr.length - 1)) * W;
+      const y = H - 4 - ((v - mn) / range) * (H - 8);
+      i === 0 ? gctx.moveTo(x, y) : gctx.lineTo(x, y);
+    });
+    gctx.stroke();
+  }
+
+  drawLine(history.L, '#5566dd');
+  drawLine(history.E, '#dd5544');
+
+  gctx.font = '9px Courier New';
+  gctx.fillStyle = '#5566dd'; gctx.fillText('|L|', 3, 10);
+  gctx.fillStyle = '#dd5544'; gctx.fillText('E',   3, 22);
+}
+
+function updateUI(Lmag, Emag, omega, t, fps) {
+  if (L0 === 0 && Lmag > 1e-10) L0 = Lmag;
+  if (E0 === 0 && Emag > 1e-10) E0 = Emag;
+
+  const dL = L0 > 1e-10 ? (Lmag - L0) / L0 * 100 : 0;
+  const dE = E0 > 1e-10 ? (Emag - E0) / E0 * 100 : 0;
+  const q = v => Math.abs(v) < 0.5 ? 'ok' : Math.abs(v) < 5 ? 'med' : 'bad';
+
+  document.getElementById('s-L0').textContent = L0.toFixed(4);
+  document.getElementById('s-L').textContent  = Lmag.toFixed(4);
+  document.getElementById('s-Ldrift').textContent = dL.toFixed(3) + '%';
+  document.getElementById('s-Ldrift').className = 'stat-val ' + q(dL);
+
+  document.getElementById('s-E0').textContent = E0.toFixed(4);
+  document.getElementById('s-E').textContent  = Emag.toFixed(4);
+  document.getElementById('s-Edrift').textContent = dE.toFixed(3) + '%';
+  document.getElementById('s-Edrift').className = 'stat-val ' + q(dE);
+
+  document.getElementById('s-wx').textContent = omega.x.toFixed(4);
+  document.getElementById('s-wy').textContent = omega.y.toFixed(4);
+  document.getElementById('s-wz').textContent = omega.z.toFixed(4);
+  document.getElementById('s-wlen').textContent = omega.length().toFixed(4);
+
+  document.getElementById('s-time').textContent = t.toFixed(2) + ' s';
+  document.getElementById('s-fps').textContent  = fps.toFixed(0);
+
+  pushHistory(Lmag, Emag);
+  drawGraph();
+}
+
+
+const container = document.getElementById('canvas-container');
+const renderer  = new THREE.WebGLRenderer({ antialias: true });
+renderer.setPixelRatio(devicePixelRatio);
+renderer.shadowMap.enabled = true;
+renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+container.appendChild(renderer.domElement);
+
+const scene  = new THREE.Scene();
+scene.background = new THREE.Color(0x0a0a0f);
+scene.fog = new THREE.Fog(0x0a0a0f, 20, 40);
+
+const camera = new THREE.PerspectiveCamera(50, 1, 0.01, 100);
+
+// Orbit state
+const orbit = { theta: 0.5, phi: 0.9, radius: 7, dragging: false };
+function applyOrbit() {
+  const { theta, phi, radius } = orbit;
+  camera.position.set(
+    radius * Math.sin(phi) * Math.sin(theta),
+    radius * Math.cos(phi),
+    radius * Math.sin(phi) * Math.cos(theta)
+  );
+  camera.lookAt(0, 0, 0);
+}
+applyOrbit();
+
+// Lights
+scene.add(new THREE.AmbientLight(0x202035, 1.5));
+const dir = new THREE.DirectionalLight(0x8899ff, 2);
+dir.position.set(5, 10, 5); dir.castShadow = true;
+scene.add(dir);
+scene.add(new THREE.PointLight(0xff4455, 0.6, 15).position.set(-3, 4, -2));
+
+scene.add(new THREE.GridHelper(14, 28, 0x151525, 0x101020));
+
+
+const BOX_W = 2.0, BOX_H = 0.7, BOX_D = 1.3;
+const bodyGeo  = new THREE.BoxGeometry(BOX_W, BOX_H, BOX_D);
+const bodyMat  = new THREE.MeshStandardMaterial({
+  color: 0x3344aa, roughness: 0.3, metalness: 0.6,
+  emissive: 0x0a0a22,
+});
+const bodyMesh = new THREE.Mesh(bodyGeo, bodyMat);
+bodyMesh.castShadow = true;
+scene.add(bodyMesh);
+
+const edgesGeo = new THREE.EdgesGeometry(bodyGeo);
+const edgesMat = new THREE.LineBasicMaterial({ color: 0x6677ff, transparent: true, opacity: 0.6 });
+const edgesMesh = new THREE.LineSegments(edgesGeo, edgesMat);
+bodyMesh.add(edgesMesh);
+
+// Body axes arrows
+const mkArrow = (dir_, color, len) => {
+  const arr = new THREE.ArrowHelper(
+    new THREE.Vector3(...dir_).normalize(),
+    new THREE.Vector3(0, 0, 0),
+    len, color, len * 0.25, len * 0.12
+  );
+  bodyMesh.add(arr);
+  return arr;
+};
+mkArrow([1,0,0], 0xff3333, 1.4);
+mkArrow([0,1,0], 0x33ff33, 1.0);
+mkArrow([0,0,1], 0x3366ff, 1.2);
+
+// L vector arrow (world space)
+const Larrow = new THREE.ArrowHelper(
+  new THREE.Vector3(0,1,0), new THREE.Vector3(0,0,0), 1, 0xffaa00, 0.3, 0.12
+);
+scene.add(Larrow);
+const L0arrow = new THREE.ArrowHelper(
+  new THREE.Vector3(0,1,0), new THREE.Vector3(0,0,0), 1, 0xff4400, 0.25, 0.10
+);
+L0arrow.line.material.opacity = 0.45; L0arrow.line.material.transparent = true;
+scene.add(L0arrow);
+
+// Resize
+function onResize() {
+  camera.aspect = container.clientWidth / container.clientHeight;
+  camera.updateProjectionMatrix();
+  renderer.setSize(container.clientWidth, container.clientHeight);
+}
+window.addEventListener('resize', onResize);
+onResize();
+
+renderer.domElement.addEventListener('mousedown', e => {
+  orbit.dragging = true;
+  orbit.startX = e.clientX; orbit.startY = e.clientY;
+  orbit.startTheta = orbit.theta; orbit.startPhi = orbit.phi;
+});
+window.addEventListener('mousemove', e => {
+  if (!orbit.dragging) return;
+  orbit.theta = orbit.startTheta - (e.clientX - orbit.startX) * 0.007;
+  orbit.phi   = Math.max(0.05, Math.min(Math.PI - 0.05,
+    orbit.startPhi + (e.clientY - orbit.startY) * 0.007));
+  applyOrbit();
+});
+window.addEventListener('mouseup', () => { orbit.dragging = false; });
+renderer.domElement.addEventListener('wheel', e => {
+  orbit.radius = Math.max(2, Math.min(20, orbit.radius + e.deltaY * 0.01));
+  applyOrbit();
+});
+
+
+let q  = new THREE.Quaternion();
+let omega = new THREE.Vector3();
+let simTime = 0;
+let L0vec = new THREE.Vector3();
+let method = 'implicit';
+
+const DT_BASE = 1 / 60;
+
+function getI()    { return new THREE.Vector3(params.Ix, params.Iy, params.Iz); }
+function getInvI() { return new THREE.Vector3(1/params.Ix, 1/params.Iy, 1/params.Iz); }
+
+function computeL() {
+  const I = getI();
+  const Iw = new THREE.Vector3(I.x * omega.x, I.y * omega.y, I.z * omega.z);
+  return Iw.applyQuaternion(q);
+}
+
+function computeE() {
+  const I = getI();
+  return 0.5 * (I.x * omega.x**2 + I.y * omega.y**2 + I.z * omega.z**2);
+}
+
+function cross(a, b) {
+  return new THREE.Vector3(
+    a.y*b.z - a.z*b.y,
+    a.z*b.x - a.x*b.z,
+    a.x*b.y - a.y*b.x
+  );
+}
+
+function integrateQuat(q_, w, dt) {
+  const wq = new THREE.Quaternion(w.x * 0.5, w.y * 0.5, w.z * 0.5, 0);
+  const dq = wq.clone().premultiply(q_);
+  q_.x += dq.x * dt;
+  q_.y += dq.y * dt;
+  q_.z += dq.z * dt;
+  q_.w += dq.w * dt;
+  q_.normalize();
+}
+
+function eulerDeriv(w) {
+  const I = getI();
+  const Iw = new THREE.Vector3(I.x*w.x, I.y*w.y, I.z*w.z);
+  const gyro = cross(w, Iw);
+  const invI = getInvI();
+  return new THREE.Vector3(
+   -invI.x * gyro.x,
+   -invI.y * gyro.y,
+   -invI.z * gyro.z
+  );
+}
+
+// ─── Integration methods ──────────────────────────────────────────────────────
+
+function stepGlobal(dt) {
+  const I = getI();
+  const invI = getInvI();
+
+  const R = new THREE.Matrix4().makeRotationFromQuaternion(q);
+  const omegaWorld = omega.clone().applyQuaternion(q);
+  const dw = new THREE.Vector3(0, 0, 0);
+  omega.add(dw.multiplyScalar(dt));
+  integrateQuat(q, omega, dt);
+}
+
+function stepLocalNoGyro(dt) {
+  const dw = new THREE.Vector3(0, 0, 0);
+  omega.add(dw.multiplyScalar(dt));
+  integrateQuat(q, omega, dt);
+}
+
+function stepExplicit(dt) {
+  const dw = eulerDeriv(omega);
+  omega.addScaledVector(dw, dt);
+  integrateQuat(q, omega, dt);
+}
+
+function stepImplicit(dt) {
+  const I = getI();
+  const invI = getInvI();
+
+  let wn = omega.clone();
+
+  for (let iter = 0; iter < 8; iter++) {
+    const Iwn = new THREE.Vector3(I.x*wn.x, I.y*wn.y, I.z*wn.z);
+    const gyro = cross(wn, Iwn);
+    wn.set(
+      omega.x - dt * invI.x * gyro.x,
+      omega.y - dt * invI.y * gyro.y,
+      omega.z - dt * invI.z * gyro.z
+    );
+  }
+
+  omega.copy(wn);
+  integrateQuat(q, omega, dt);
+}
+
+// ─── Scene / method control ───────────────────────────────────────────────────
+function setMethod(m) {
+  method = m;
+  document.querySelectorAll('#method-btns button').forEach(b => b.classList.remove('active'));
+  document.getElementById('btn-' + m).classList.add('active');
+  document.getElementById('method-desc').textContent = DESCS[m] || '';
+  resetSim();
+}
+
+function resetSim() {
+  simTime = 0;
+  L0 = 0; E0 = 0;
+  history.L.length = 0; history.E.length = 0;
+
+  q.set(0, 0, 0, 1);
+  const tilt = new THREE.Quaternion();
+  tilt.setFromAxisAngle(new THREE.Vector3(1, 0, 0), 0.08);
+  q.premultiply(tilt);
+
+  omega.set(0.08 * params.omega0, params.omega0, 0.0);
+
+  const Lv = computeL();
+  L0vec.copy(Lv);
+
+  const Llen0 = Lv.length();
+  if (Llen0 > 1e-10) {
+    L0arrow.setDirection(Lv.clone().normalize());
+    L0arrow.setLength(Math.min(Llen0 * 0.4, 3), 0.25, 0.10);
+  }
+}
+
+let lastTime = performance.now();
+let fpsSmooth = 60;
+let currentMethod = 'implicit';
+
+function animate() {
+  requestAnimationFrame(animate);
+
+  const now = performance.now();
+  const wallDt = Math.min((now - lastTime) / 1000, 0.05);
+  lastTime = now;
+  fpsSmooth = fpsSmooth * 0.95 + (1 / (wallDt + 1e-10)) * 0.05;
+
+  if (!params.paused) {
+    const dt = DT_BASE * params.dtScale;
+    simTime += dt;
+
+    if (method === 'global')         stepGlobal(dt);
+    else if (method === 'local_no_gyro') stepLocalNoGyro(dt);
+    else if (method === 'explicit')  stepExplicit(dt);
+    else if (method === 'implicit')  stepImplicit(dt);
+
+    const wlen = omega.length();
+    if (wlen > 200) omega.multiplyScalar(200 / wlen);
+  }
+
+  bodyMesh.quaternion.copy(q);
+
+  const Lv = computeL();
+  const Llen = Lv.length();
+  if (Llen > 1e-10) {
+    Larrow.setDirection(Lv.clone().normalize());
+    Larrow.setLength(Math.min(Llen * 0.4, 3.5), 0.28, 0.11);
+  }
+
+  updateUI(Llen, computeE(), omega, simTime, fpsSmooth);
+
+  renderer.render(scene, camera);
+}
+
+setMethod('implicit');
+animate();
+</script>
+</body>
+</html>
